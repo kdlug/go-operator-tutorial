@@ -18,7 +18,9 @@ package main
 
 import (
 	"flag"
+	"github.com/kdlug/go-operator-tutorial/internal/controller"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -31,24 +33,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	cachev1alpha1 "github.com/kdlug/memcached-operator/api/v1alpha1"
-	"github.com/kdlug/memcached-operator/internal/controller"
+	cachev1alpha1 "github.com/kdlug/go-operator-tutorial/api/v1alpha1"
 	//+kubebuilder:scaffold:imports
 )
 
 var (
+	// Every set of controllers needs a Scheme, which provides mappings between Kinds and their corresponding Go types.
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	// our generated schema: group cache, version: v1alpha1
+	// operator-sdk create api --group=cache --version=v1alpha1 --kind=Memcached
 	utilruntime.Must(cachev1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
 }
 
 func main() {
+	// set some basic flags for metrics
 	var metricsAddr string
 	var enableLeaderElection bool
 	var probeAddr string
@@ -65,8 +69,16 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
+	//  use the MultiNamespacedCacheBuilder to watch a specific set of namespaces
+	var namespaces []string // List of Namespaces
+	namespaces = append(namespaces, "operator")
+	// We instantiate a manager, which keeps track of running all of our controllers,
+	// as well as setting up shared caches and clients to the API server (notice we tell the manager about our Scheme).
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
+		Scheme:   scheme,
+		NewCache: cache.MultiNamespacedCacheBuilder(namespaces), // watch a specific set of namespaces
+		// Namespace:              namespace, // the Manager can restrict the namespace that all controllers will watch for resources
+		// In this scenario, it is also suggested to restrict the provided authorization to this namespace by replacing the default ClusterRole and ClusterRoleBinding to Role and RoleBinding respectively.
 		MetricsBindAddress:     metricsAddr,
 		Port:                   9443,
 		HealthProbeBindAddress: probeAddr,
@@ -82,7 +94,7 @@ func main() {
 		// the manager stops, so would be fine to enable this option. However,
 		// if you are doing or is intended to do any operation such as perform cleanups
 		// after the manager stops then its usage might be unsafe.
-		// LeaderElectionReleaseOnCancel: true,
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -90,8 +102,9 @@ func main() {
 	}
 
 	if err = (&controller.MemcachedReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("memcached-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Memcached")
 		os.Exit(1)

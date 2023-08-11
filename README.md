@@ -1,15 +1,116 @@
-# go-operator-tutorial
-// TODO(user): Add simple overview of use/purpose
+# GO operator tutorial
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+Example Memcached operator based on 
+Go operator tutorial https://sdk.operatorframework.io/docs/building-operators/golang/tutorial/
+
+## How it works
+This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
+
+It uses [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/),
+which provide a reconcile function responsible for synchronizing resources until the desired state is reached on the cluster.
 
 ## Getting Started
+
 You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.
 **Note:** Your controller will automatically use the current context in your kubeconfig file (i.e. whatever cluster `kubectl cluster-info` shows).
 
-### Running on the cluster
-1. Install Instances of Custom Resources:
+### Create a dedicated namespace
+
+```shell
+kubectl create namespace operator
+```
+
+### Switch context
+
+```shell
+# using kubens
+kubens operator
+
+# using kubectl
+kubectl config set-context --current --namespace=operator
+```
+ 
+## Running locally
+
+**NOTE:** Make sure that your active is set to `operator`
+
+```shell
+# using kubens
+$ kubens -c
+operator
+
+# using kubectl
+$ kubectl config view --minify | grep namespace
+    namespace: operator
+```
+#### Install the CRDs into the cluster:
+
+
+```sh
+make install
+```
+Verify if CRD is created:
+
+```shell
+$ kubectl get crd
+NAME                          CREATED AT
+memcacheds.cache.github.com   2023-08-18T11:28:05Z
+```
+
+#### Run your controller
+
+This will run in the foreground, so switch to a new terminal if you want to leave it running:
+
+```sh
+make run
+```
+
+**NOTE:** You can also run this in one step by running: `make install run`
+
+#### Modifying the API definitions
+If you are editing the API definitions, generate the manifests such as CRs or CRDs using:
+
+```sh
+make manifests
+```
+
+**NOTE:** Run `make --help` for more information on all potential `make` targets
+
+More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+
+#### Create Memcached CR
+
+```shell
+kubectl apply -f config/samples/cache_v1alpha1_memcached.yaml
+```
+
+Check operator logs
+
+```shell
+2023-08-18T14:52:34+02:00	INFO	Creating a new Deployment	{"controller": "memcached", "controllerGroup": "cache.github.com", "controllerKind": "Memcached", "Memcached": {"name":"memcached-sample","namespace":"operator"}, "namespace": "operator", "name": "memcached-sample", "reconcileID": "20046466-8ac8-4488-a0ca-1b4e2f99f7a8", "Deployment.Namespace": "operator", "Deployment.Name": "memcached-sample"}
+```
+
+## Cleanup
+
+1. Delete memcached object:
+
+```kubectl 
+$ kubectl delete -f config/samples/cache_v1alpha1_memcached.yaml
+memcached.cache.github.com "memcached-sample" deleted
+```
+
+2. Stop the controller application `ctrl+C`
+
+3. Delete crd
+
+```shell
+kubectl delete crd memcacheds.cache.github.com
+```
+
+
+## Running on the cluster
+1. Install
+l Instances of Custom Resources:
 
 ```sh
 kubectl apply -f config/samples/
@@ -41,54 +142,48 @@ UnDeploy the controller from the cluster:
 make undeploy
 ```
 
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
 
-### How it works
-This project aims to follow the Kubernetes [Operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/).
+### Test it out locally
 
-It uses [Controllers](https://kubernetes.io/docs/concepts/architecture/controller/),
-which provide a reconcile function responsible for synchronizing resources until the desired state is reached on the cluster.
+ 
 
-### Test It Out
-1. Install the CRDs into the cluster:
 
-```sh
-make install
+## Troubleshooting
+
+### Unable to find MEMCACHED_IMAGE environment variable with the image
 ```
-
-2. Run your controller (this will run in the foreground, so switch to a new terminal if you want to leave it running):
-
-```sh
 make run
+...
+2023-08-18T14:41:50+02:00	ERROR	Reconciler error	{"controller": "memcached", "controllerGroup": "cache.github.com", "controllerKind": "Memcached", "Memcached": {"name":"memcached-sample","namespace":"operator"}, "namespace": "operator", "name": "memcached-sample", "reconcileID": "c1fa0f69-4b37-42ae-a887-6e17e045c873", "error": "Unable to find MEMCACHED_IMAGE environment variable with the image"}
 ```
 
-**NOTE:** You can also run this in one step by running: `make install run`
+You have to provide image for deployment using MEMCACHED_IMAGE variable.
 
-### Modifying the API definitions
-If you are editing the API definitions, generate the manifests such as CRs or CRDs using:
+F.ex.
 
-```sh
-make manifests
+```shell
+make MEMCACHED_IMAGE="memcached:1.4.36-alpine"  run
 ```
 
-**NOTE:** Run `make --help` for more information on all potential `make` targets
+### Unable to delete CR
 
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+When the following command got stuck:
+```shell
+$ kubectl delete -f config/samples/cache_v1alpha1_memcached.yaml
+```
 
-## License
+Edit CR:
 
-Copyright 2023.
+```shell
+$ kubectl edit memcached memcached-sample
+```
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Remove sections:
+- deletionTimestamp:
+- finalizers:
 
-    http://www.apache.org/licenses/LICENSE-2.0
+Run delete command again:
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+```shell
+$ kubectl delete -f config/samples/cache_v1alpha1_memcached.yaml
+```
