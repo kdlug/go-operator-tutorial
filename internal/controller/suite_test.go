@@ -17,8 +17,15 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"os"
 	"path/filepath"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"testing"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -40,6 +47,8 @@ import (
 var cfg *rest.Config
 var k8sClient client.Client
 var testEnv *envtest.Environment
+var ctx context.Context
+var cancel context.CancelFunc
 
 func TestAPIs(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -49,6 +58,8 @@ func TestAPIs(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
+	Expect(os.Setenv("MEMCACHED_IMAGE", "memcached:1.4.36-alpine")).To(Succeed())
+	ctx, cancel = context.WithCancel(context.TODO())
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
@@ -71,10 +82,97 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(k8sClient).NotTo(BeNil())
 
+	k8sManager, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme: scheme.Scheme,
+	})
+	Expect(err).ToNot(HaveOccurred())
+
+	err = (&MemcachedReconciler{
+		Client: k8sManager.GetClient(),
+		Scheme: k8sManager.GetScheme(),
+	}).SetupWithManager(k8sManager)
+	Expect(err).ToNot(HaveOccurred())
+
+	// anonymous function run as gouroutine which will run controller in background
+	go func() {
+		defer GinkgoRecover()       // when anonymous function finishes GinkoRecover() will be run
+		err = k8sManager.Start(ctx) // runs k8s manager
+		Expect(err).ToNot(HaveOccurred(), "failed to run manager")
+	}()
+})
+
+var _ = Describe("MemcachedController", func() {
+	Context("testing memcache controller", func() {
+		var memcached *cachev1alpha1.Memcached
+		BeforeEach(func() {
+			memcached = getMemcached("default", "test-memcache")
+		})
+
+		// Integration tests using It blocks are written here.
+		It("should create deployment", func() {
+			Expect(k8sClient.Create(ctx, memcached)).To(BeNil()) // create memcache CR
+			createdDeploy := &appsv1.Deployment{}
+			deployKey := types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace}
+			// after creating a CR controller should create a Deployment
+			// we call testEnv Kubernetes API Server to get the deployment
+			// Eventually block is a retry block with a timeout
+			// we expect to get deployment in that time
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, deployKey, createdDeploy) //
+				return err == nil
+			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+		})
+
+		It("verify replicas for deployment", func() {
+			createdDeploy := &appsv1.Deployment{}
+			deployKey := types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, deployKey, createdDeploy)
+				return err == nil
+			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			Expect(createdDeploy.Spec.Replicas).To(Equal(&memcached.Spec.Size))
+		})
+
+		It("should update deployment, once memcached size is changed", func() {
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace},
+				memcached)).Should(Succeed())
+			// update size to 3
+			memcached.Spec.Size = 3
+			Expect(k8sClient.Update(ctx, memcached)).Should(Succeed())
+			Eventually(func() bool {
+				k8sClient.Get(ctx,
+					types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace},
+					memcached)
+				return memcached.Spec.Size == 3
+			}, time.Second*10, time.Millisecond*250).Should(BeTrue())
+			createdDeploy := &appsv1.Deployment{}
+			deployKey := types.NamespacedName{Name: memcached.Name, Namespace: memcached.Namespace}
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, deployKey, createdDeploy)
+				return err == nil
+			}, time.Second*20, time.Millisecond*250).Should(BeTrue())
+			Expect(createdDeploy.Spec.Replicas).To(Equal(&memcached.Spec.Size))
+		})
+
+	})
 })
 
 var _ = AfterSuite(func() {
+	cancel()
 	By("tearing down the test environment")
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })
+
+func getMemcached(namespace string, name string) *cachev1alpha1.Memcached {
+	return &cachev1alpha1.Memcached{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: cachev1alpha1.MemcachedSpec{
+			Size:          2,
+			ContainerPort: 8090,
+		},
+	}
+}
